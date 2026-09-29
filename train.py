@@ -248,6 +248,18 @@ def get_muril_embeddings(text_model, tokenizer, texts, device, batch_size=32):
         embeddings.append(batch_embeddings.cpu().numpy())
     return np.vstack(embeddings)
 
+def stratified_split(df, seed, split_strategy, test_size=0.10):
+    if split_strategy == "level1":
+        stratify_labels = df["Level1"]
+    elif split_strategy == "level2":
+        stratify_labels = df["Level2"]
+    else:
+        raise ValueError(
+            f"Unknown split strategy: {split_strategy}"
+        )
+    train_df, val_df = train_test_split(df, test_size=test_size, random_state=seed, stratify=stratify_labels)
+    return train_df, val_df
+
 def main():
     args = parse_arguments()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -349,314 +361,322 @@ def main():
     seeds = [7, 10, 42, 56, 100]
 
     all_results = []
-    for EXP in EXPERIMENTS:
-        TEXT_ENCODER = EXP["encoder"]
-        LOSS_TYPE = EXP["loss_type"]
+    SPLIT_STRATEGIES = [
+        "level1",
+        "level2"
+    ]
 
-        print("\n" + "=" * 80)
-        print(f"EXPERIMENT: {TEXT_ENCODER} + {LOSS_TYPE}")
-        print("=" * 80)
+    for SPLIT_STRATEGY in SPLIT_STRATEGIES:
+        for EXP in EXPERIMENTS:
+            TEXT_ENCODER = EXP["encoder"]
+            LOSS_TYPE = EXP["loss_type"]
 
-        experiment_dir = os.path.join(RESULTS_DIR, TEXT_ENCODER, LOSS_TYPE)
-        os.makedirs(experiment_dir, exist_ok=True)
-
-        if TEXT_ENCODER == "bge-m3":
-            text_model = SentenceTransformer("BAAI/bge-m3", device=device, cache_folder="./hf_models")
-            text_tokenizer = None
-        elif TEXT_ENCODER == "muril":
-            text_tokenizer = AutoTokenizer.from_pretrained("google/muril-base-cased", cache_dir="./hf_models")
-            text_model = AutoModel.from_pretrained("google/muril-base-cased", cache_dir="./hf_models").to(device)
-            text_model.eval()
-        else:
-            raise ValueError(f"Unknown encoder: {TEXT_ENCODER}")
-
-        experiment_results = []
-
-
-
-
-        for SEED in seeds:
-            print("\n" + "-" * 70)
+            print("\n" + "=" * 80)
             print(
-                f"Encoder: {TEXT_ENCODER} | "
-                f"Loss: {LOSS_TYPE} | "
-                f"Seed: {SEED}"
+                f"EXPERIMENT: "
+                f"Split={SPLIT_STRATEGY} | "
+                f"Encoder={TEXT_ENCODER} | "
+                f"Loss={LOSS_TYPE}"
             )
-            print("-" * 70)
+            print("=" * 80)
 
-            set_seed(SEED)
-            seed_dir = os.path.join(
-                experiment_dir,
-                f"seed_{SEED}"
+            experiment_dir = os.path.join(
+                RESULTS_DIR,
+                SPLIT_STRATEGY,
+                TEXT_ENCODER,
+                LOSS_TYPE
             )
-
             os.makedirs(
-                seed_dir,
+                experiment_dir,
                 exist_ok=True
             )
 
-            # Train and validation splitting: holding 90% instances for training and remaining 10% for validation
-            train_df, val_df = train_test_split(df, test_size=0.10, random_state=SEED, stratify=df['Level1'])
+            experiment_results = []
 
-            # Preserve original dataframe indices
-            train_indices = train_df.index.to_numpy()
-            val_indices = val_df.index.to_numpy()
 
-            train_df = train_df.reset_index(drop=True)
-            val_df = val_df.reset_index(drop=True)
-            print("Train:", train_df.shape, " Val:", val_df.shape)
-
-            distribution_plot(df, train_df, val_df, seed_dir)
-
-            # Label encoding the classes for processing
-            le1 = LabelEncoder()
-            le2 = LabelEncoder()
-
-            train_df['l1_id'] = le1.fit_transform(train_df['Level1'])
-            val_df['l1_id'] = le1.transform(val_df['Level1'])
-
-            train_df['l2_id'] = le2.fit_transform(train_df['Level2'])
-            val_df['l2_id'] = le2.transform(val_df['Level2'])
-
-            NUM_L1 = len(le1.classes_)
-            NUM_L2 = len(le2.classes_)
-            print("Level 1 classes:", list(le1.classes_))
-            print("Level 2 classes:", list(le2.classes_))
-
-            # Image embeddings
-            train_img_emb = all_img_emb[train_indices]
-            val_img_emb = all_img_emb[val_indices]
-
-            # Text embeddings
-            all_txt_emb = text_embeddings[TEXT_ENCODER]
-
-            train_txt_emb = all_txt_emb[train_indices]
-            val_txt_emb = all_txt_emb[val_indices]
-
-            pca = PCA(n_components=512, random_state=SEED)
-            train_txt_emb = pca.fit_transform(train_txt_emb)
-            val_txt_emb = pca.transform(val_txt_emb)
-            explained_variance = pca.explained_variance_ratio_.sum()
-            print(
-                f"\n{TEXT_ENCODER} PCA explained variance: "
-                f"{explained_variance:.4f}"
-            )
-
-            # Fusion of Image and Text embeddings
-            train_features = np.concatenate([train_img_emb, train_txt_emb], axis=1)
-            val_features = np.concatenate([val_img_emb, val_txt_emb], axis=1)
-            print("\nImage embedding dimension:", train_img_emb.shape[1])
-            print("Text embedding dimension:", train_txt_emb.shape[1])
-            print("Fused feature dimension:", train_features.shape[1])
-
-            train_ds = MemeFeatureDataset(train_features, train_df['l1_id'].values, train_df['l2_id'].values)
-            val_ds = MemeFeatureDataset(val_features, val_df['l1_id'].values, val_df['l2_id'].values)
-
-            train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
-            val_loader = DataLoader(val_ds, batch_size=32, shuffle=False)
-
-            input_dim = train_features.shape[1]
-            model = HierarchicalClassifier(input_dim, NUM_L1, NUM_L2).to(device)
-
-            model_description(model)
-
-            if LOSS_TYPE == "weighted":
-                l1_weights = compute_class_weight(
-                    'balanced',
-                    classes=np.unique(train_df['l1_id']),
-                    y=train_df['l1_id']
+            for SEED in seeds:
+                print("\n" + "-" * 70)
+                print(
+                    f"Encoder: {TEXT_ENCODER} | "
+                    f"Loss: {LOSS_TYPE} | "
+                    f"Seed: {SEED}"
                 )
-                l2_weights = compute_class_weight(
-                    'balanced',
-                    classes=np.unique(train_df['l2_id']),
-                    y=train_df['l2_id']
-                )
-                l1_weights = torch.tensor(
-                    l1_weights,
-                    dtype=torch.float32
-                ).to(device)
-                l2_weights = torch.tensor(
-                    l2_weights,
-                    dtype=torch.float32
-                ).to(device)
-                criterion_l1 = nn.CrossEntropyLoss(
-                    weight=l1_weights
-                )
-                criterion_l2 = nn.CrossEntropyLoss(
-                    weight=l2_weights
-                )
-            elif LOSS_TYPE == "unweighted":
-                criterion_l1 = nn.CrossEntropyLoss()
-                criterion_l2 = nn.CrossEntropyLoss()
-            else:
-                raise ValueError("LOSS_TYPE must be either 'weighted' or 'unweighted'")
-            # need to make it correct
-            optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=2, factor=0.5)
+                print("-" * 70)
 
-            EPOCHS = 60
-            def evaluate(loader):
+                set_seed(SEED)
+                seed_dir = os.path.join(
+                    experiment_dir,
+                    f"seed_{SEED}"
+                )
+
+                os.makedirs(
+                    seed_dir,
+                    exist_ok=True
+                )
+
+                # Train and validation splitting: holding 90% instances for training and remaining 10% for validation
+                train_df, val_df = stratified_split(df, seed=SEED, split_strategy=SPLIT_STRATEGY, test_size=0.10)
+
+                # Preserve original dataframe indices
+                train_indices = train_df.index.to_numpy()
+                val_indices = val_df.index.to_numpy()
+
+                train_df = train_df.reset_index(drop=True)
+                val_df = val_df.reset_index(drop=True)
+                print("Train:", train_df.shape, " Val:", val_df.shape)
+
+                distribution_plot(df, train_df, val_df, seed_dir)
+
+                # Label encoding the classes for processing
+                le1 = LabelEncoder()
+                le2 = LabelEncoder()
+
+                train_df['l1_id'] = le1.fit_transform(train_df['Level1'])
+                val_df['l1_id'] = le1.transform(val_df['Level1'])
+
+                train_df['l2_id'] = le2.fit_transform(train_df['Level2'])
+                val_df['l2_id'] = le2.transform(val_df['Level2'])
+
+                NUM_L1 = len(le1.classes_)
+                NUM_L2 = len(le2.classes_)
+                print("Level 1 classes:", list(le1.classes_))
+                print("Level 2 classes:", list(le2.classes_))
+
+                # Image embeddings
+                train_img_emb = all_img_emb[train_indices]
+                val_img_emb = all_img_emb[val_indices]
+
+                # Text embeddings
+                all_txt_emb = text_embeddings[TEXT_ENCODER]
+
+                train_txt_emb = all_txt_emb[train_indices]
+                val_txt_emb = all_txt_emb[val_indices]
+
+                pca = PCA(n_components=512, random_state=SEED)
+                train_txt_emb = pca.fit_transform(train_txt_emb)
+                val_txt_emb = pca.transform(val_txt_emb)
+                explained_variance = pca.explained_variance_ratio_.sum()
+                print(
+                    f"\n{TEXT_ENCODER} PCA explained variance: "
+                    f"{explained_variance:.4f}"
+                )
+
+                # Fusion of Image and Text embeddings
+                train_features = np.concatenate([train_img_emb, train_txt_emb], axis=1)
+                val_features = np.concatenate([val_img_emb, val_txt_emb], axis=1)
+                print("\nImage embedding dimension:", train_img_emb.shape[1])
+                print("Text embedding dimension:", train_txt_emb.shape[1])
+                print("Fused feature dimension:", train_features.shape[1])
+
+                train_ds = MemeFeatureDataset(train_features, train_df['l1_id'].values, train_df['l2_id'].values)
+                val_ds = MemeFeatureDataset(val_features, val_df['l1_id'].values, val_df['l2_id'].values)
+
+                train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
+                val_loader = DataLoader(val_ds, batch_size=32, shuffle=False)
+
+                input_dim = train_features.shape[1]
+                model = HierarchicalClassifier(input_dim, NUM_L1, NUM_L2).to(device)
+
+                model_description(model)
+
+                if LOSS_TYPE == "weighted":
+                    l1_weights = compute_class_weight(
+                        'balanced',
+                        classes=np.unique(train_df['l1_id']),
+                        y=train_df['l1_id']
+                    )
+                    l2_weights = compute_class_weight(
+                        'balanced',
+                        classes=np.unique(train_df['l2_id']),
+                        y=train_df['l2_id']
+                    )
+                    l1_weights = torch.tensor(
+                        l1_weights,
+                        dtype=torch.float32
+                    ).to(device)
+                    l2_weights = torch.tensor(
+                        l2_weights,
+                        dtype=torch.float32
+                    ).to(device)
+                    criterion_l1 = nn.CrossEntropyLoss(
+                        weight=l1_weights
+                    )
+                    criterion_l2 = nn.CrossEntropyLoss(
+                        weight=l2_weights
+                    )
+                elif LOSS_TYPE == "unweighted":
+                    criterion_l1 = nn.CrossEntropyLoss()
+                    criterion_l2 = nn.CrossEntropyLoss()
+                else:
+                    raise ValueError("LOSS_TYPE must be either 'weighted' or 'unweighted'")
+                # need to make it correct
+                optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=2, factor=0.5)
+
+                EPOCHS = 60
+                def evaluate(loader):
+                    model.eval()
+
+                    total_val_loss = 0
+
+                    all_l1_preds, all_l1_true = [], []
+                    all_l2_preds, all_l2_true = [], []
+
+                    with torch.no_grad():
+                        for x, y1, y2 in loader:
+                            x = x.to(device)
+                            y1 = y1.to(device)
+                            y2 = y2.to(device)
+
+                            l1_logits, l2_logits = model(x)
+                            loss = (criterion_l1(l1_logits, y1) + criterion_l2(l2_logits, y2))
+                            total_val_loss += loss.item()
+                            all_l1_preds.extend(l1_logits.argmax(1).cpu().numpy())
+                            all_l1_true.extend(
+                                y1.cpu().numpy()
+                            )
+                            all_l2_preds.extend(
+                                l2_logits.argmax(1).cpu().numpy()
+                            )
+                            all_l2_true.extend(
+                                y2.cpu().numpy()
+                            )
+                    avg_val_loss = total_val_loss / len(loader)
+                    f1_l1 = f1_score(all_l1_true, all_l1_preds, average='macro')
+                    f1_l2 = f1_score(all_l2_true, all_l2_preds, average='macro')
+                    acc_l1 = accuracy_score(all_l1_true, all_l1_preds)
+                    acc_l2 = accuracy_score(all_l2_true, all_l2_preds)
+                    return avg_val_loss, f1_l1, f1_l2, acc_l1, acc_l2
+
+                best_f1 = 0
+                history = []
+
+                for epoch in range(EPOCHS):
+                    model.train()
+                    total_loss = 0
+                    for x, y1, y2 in train_loader:
+                        x, y1, y2 = x.to(device), y1.to(device), y2.to(device)
+                        optimizer.zero_grad()
+                        l1_logits, l2_logits = model(x)
+                        loss = criterion_l1(l1_logits, y1) + criterion_l2(l2_logits, y2)
+                        loss.backward()
+                        optimizer.step()
+                        total_loss += loss.item()
+
+                    # f1_l1, f1_l2, acc_l1, acc_l2 = evaluate(val_loader)
+                    val_loss, f1_l1, f1_l2, acc_l1, acc_l2 = evaluate(val_loader)
+
+                    avg_f1 = (f1_l1 + f1_l2) / 2
+                    scheduler.step(avg_f1)
+                    history.append({
+                        "epoch": epoch + 1,
+                        "loss": total_loss / len(train_loader),
+                        "val_loss": val_loss,
+                        "val_f1_l1": f1_l1,
+                        "val_f1_l2": f1_l2
+                    })
+
+                    print(
+                        f"Epoch {epoch + 1}/{EPOCHS} "
+                        f"| train_loss={total_loss / len(train_loader):.4f} "
+                        f"| val_loss={val_loss:.4f} "
+                        f"| val_F1_L1={f1_l1:.4f} "
+                        f"| val_Acc_L1={acc_l1:.4f} "
+                        f"| val_F1_L2={f1_l2:.4f} "
+                        f"| val_Acc_L2={acc_l2:.4f}"
+                    )
+
+                    if avg_f1 > best_f1:
+                        best_f1 = avg_f1
+                        model_path = os.path.join(
+                            seed_dir,
+                            f"best_model.pt"
+                        )
+                        torch.save(model.state_dict(), model_path)
+                        print(f"-> saved new best model: {model_path}")
+
+                hist_df = pd.DataFrame(history)
+                fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+                # Training and Validation Loss
+                axes[0].plot(hist_df['epoch'], hist_df['loss'], label='Train Loss')
+                axes[0].plot(hist_df['epoch'], hist_df['val_loss'], label='Validation Loss')
+                axes[0].set_title('Training vs Validation Loss')
+                axes[0].set_xlabel("epoch", fontsize=12)
+                axes[0].set_ylabel("loss", fontsize=12)
+                axes[0].legend()
+                # Validation F1
+                axes[1].plot(hist_df['epoch'], hist_df['val_f1_l1'], label='Level 1 F1')
+                axes[1].plot(hist_df['epoch'], hist_df['val_f1_l2'], label='Level 2 F1')
+                axes[1].legend()
+                # axes[1].set_title('Validation Macro-F1')
+                axes[1].set_xlabel("epoch", fontsize=12)
+                axes[1].set_ylabel("Macro-F1", fontsize=12)
+                # fig.suptitle(f"Training/Validation Loss and Validation F1 - seed {SEED}")
+                fig.suptitle(f"Validation Macro-F1")
+                plt.tight_layout()
+                plt.savefig(os.path.join(seed_dir, f"val_macro_f1.png"), dpi=300, bbox_inches='tight')
+                # plt.show()
+
+                model.load_state_dict(torch.load(model_path))
                 model.eval()
 
-                total_val_loss = 0
-
-                all_l1_preds, all_l1_true = [], []
-                all_l2_preds, all_l2_true = [], []
-
+                all_l1_preds, all_l1_true, all_l2_preds, all_l2_true = [], [], [], []
                 with torch.no_grad():
-                    for x, y1, y2 in loader:
+                    for x, y1, y2 in val_loader:
                         x = x.to(device)
-                        y1 = y1.to(device)
-                        y2 = y2.to(device)
-
                         l1_logits, l2_logits = model(x)
-                        loss = (criterion_l1(l1_logits, y1) + criterion_l2(l2_logits, y2))
-                        total_val_loss += loss.item()
                         all_l1_preds.extend(l1_logits.argmax(1).cpu().numpy())
-                        all_l1_true.extend(
-                            y1.cpu().numpy()
-                        )
-                        all_l2_preds.extend(
-                            l2_logits.argmax(1).cpu().numpy()
-                        )
-                        all_l2_true.extend(
-                            y2.cpu().numpy()
-                        )
-                avg_val_loss = total_val_loss / len(loader)
-                f1_l1 = f1_score(all_l1_true, all_l1_preds, average='macro')
-                f1_l2 = f1_score(all_l2_true, all_l2_preds, average='macro')
-                acc_l1 = accuracy_score(all_l1_true, all_l1_preds)
-                acc_l2 = accuracy_score(all_l2_true, all_l2_preds)
-                return avg_val_loss, f1_l1, f1_l2, acc_l1, acc_l2
+                        all_l1_true.extend(y1.numpy())
+                        all_l2_preds.extend(l2_logits.argmax(1).cpu().numpy())
+                        all_l2_true.extend(y2.numpy())
 
-            best_f1 = 0
-            history = []
+                # Generate reports
+                report_l1 = classification_report(
+                    all_l1_true,
+                    all_l1_preds,
+                    target_names=le1.classes_,
+                    output_dict=True
+                )
+                report_l2 = classification_report(
+                    all_l2_true,
+                    all_l2_preds,
+                    target_names=le2.classes_,
+                    output_dict=True
+                )
+                # Save reports
+                with open(os.path.join(seed_dir, "level1_report.txt"), "w") as f:
+                    f.write(str(report_l1))
+                with open(os.path.join(seed_dir, "level2_report.txt"), "w") as f:
+                    f.write(str(report_l2))
+                # print(report_l1)
+                # print(report_l2)
 
-            for epoch in range(EPOCHS):
-                model.train()
-                total_loss = 0
-                for x, y1, y2 in train_loader:
-                    x, y1, y2 = x.to(device), y1.to(device), y2.to(device)
-                    optimizer.zero_grad()
-                    l1_logits, l2_logits = model(x)
-                    loss = criterion_l1(l1_logits, y1) + criterion_l2(l2_logits, y2)
-                    loss.backward()
-                    optimizer.step()
-                    total_loss += loss.item()
-
-                # f1_l1, f1_l2, acc_l1, acc_l2 = evaluate(val_loader)
-                val_loss, f1_l1, f1_l2, acc_l1, acc_l2 = evaluate(val_loader)
-
-                avg_f1 = (f1_l1 + f1_l2) / 2
-                scheduler.step(avg_f1)
-                history.append({
-                    "epoch": epoch + 1,
-                    "loss": total_loss / len(train_loader),
-                    "val_loss": val_loss,
-                    "val_f1_l1": f1_l1,
-                    "val_f1_l2": f1_l2
+                l1_acc = accuracy_score(all_l1_true, all_l1_preds)
+                l2_acc = accuracy_score(all_l2_true, all_l2_preds)
+                # Store results for this seed
+                experiment_results.append({
+                    "split_strategy": SPLIT_STRATEGY,
+                    "encoder": TEXT_ENCODER,
+                    "loss_type": LOSS_TYPE,
+                    "seed": SEED,
+                    # Level 1
+                    "l1_accuracy": l1_acc,
+                    "l1_macro_f1": report_l1["macro avg"]["f1-score"],
+                    # "l1_weighted_f1": report_l1["weighted avg"]["f1-score"],
+                    # Level 2
+                    "l2_accuracy": l2_acc,
+                    "l2_macro_f1": report_l2["macro avg"]["f1-score"],
+                    # "l2_weighted_f1": report_l2["weighted avg"]["f1-score"]
+                    # Average across Level 1 and Level 2
+                    "avg_accuracy": (l1_acc + l2_acc) / 2,
+                    "avg_macro_f1": (report_l1["macro avg"]["f1-score"] + report_l2["macro avg"]["f1-score"]) / 2,
+                    # "avg_weighted_f1": (report_l1["weighted avg"]["f1-score"] + report_l2["weighted avg"]["f1-score"]) / 2
                 })
 
-                print(
-                    f"Epoch {epoch + 1}/{EPOCHS} "
-                    f"| train_loss={total_loss / len(train_loader):.4f} "
-                    f"| val_loss={val_loss:.4f} "
-                    f"| val_F1_L1={f1_l1:.4f} "
-                    f"| val_Acc_L1={acc_l1:.4f} "
-                    f"| val_F1_L2={f1_l2:.4f} "
-                    f"| val_Acc_L2={acc_l2:.4f}"
-                )
-
-                if avg_f1 > best_f1:
-                    best_f1 = avg_f1
-                    model_path = os.path.join(
-                        seed_dir,
-                        f"best_model.pt"
-                    )
-                    torch.save(model.state_dict(), model_path)
-                    print(f"-> saved new best model: {model_path}")
-
-            hist_df = pd.DataFrame(history)
-            fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-            # Training and Validation Loss
-            axes[0].plot(hist_df['epoch'], hist_df['loss'], label='Train Loss')
-            axes[0].plot(hist_df['epoch'], hist_df['val_loss'], label='Validation Loss')
-            axes[0].set_title('Training vs Validation Loss')
-            axes[0].set_xlabel("epoch", fontsize=12)
-            axes[0].set_ylabel("loss", fontsize=12)
-            axes[0].legend()
-            # Validation F1
-            axes[1].plot(hist_df['epoch'], hist_df['val_f1_l1'], label='Level 1 F1')
-            axes[1].plot(hist_df['epoch'], hist_df['val_f1_l2'], label='Level 2 F1')
-            axes[1].legend()
-            # axes[1].set_title('Validation Macro-F1')
-            axes[1].set_xlabel("epoch", fontsize=12)
-            axes[1].set_ylabel("Macro-F1", fontsize=12)
-            # fig.suptitle(f"Training/Validation Loss and Validation F1 - seed {SEED}")
-            fig.suptitle(f"Validation Macro-F1")
-            plt.tight_layout()
-            plt.savefig(os.path.join(seed_dir, f"val_macro_f1.png"), dpi=300, bbox_inches='tight')
-            # plt.show()
-
-            model.load_state_dict(torch.load(model_path))
-            model.eval()
-
-            all_l1_preds, all_l1_true, all_l2_preds, all_l2_true = [], [], [], []
-            with torch.no_grad():
-                for x, y1, y2 in val_loader:
-                    x = x.to(device)
-                    l1_logits, l2_logits = model(x)
-                    all_l1_preds.extend(l1_logits.argmax(1).cpu().numpy())
-                    all_l1_true.extend(y1.numpy())
-                    all_l2_preds.extend(l2_logits.argmax(1).cpu().numpy())
-                    all_l2_true.extend(y2.numpy())
-
-            # Generate reports
-            report_l1 = classification_report(
-                all_l1_true,
-                all_l1_preds,
-                target_names=le1.classes_,
-                output_dict=True
-            )
-            report_l2 = classification_report(
-                all_l2_true,
-                all_l2_preds,
-                target_names=le2.classes_,
-                output_dict=True
-            )
-            # Save reports
-            with open(os.path.join(seed_dir, "level1_report.txt"), "w") as f:
-                f.write(str(report_l1))
-            with open(os.path.join(seed_dir, "level2_report.txt"), "w") as f:
-                f.write(str(report_l2))
-            # print(report_l1)
-            # print(report_l2)
-
-            l1_acc = accuracy_score(all_l1_true, all_l1_preds)
-            l2_acc = accuracy_score(all_l2_true, all_l2_preds)
-            # Store results for this seed
-            experiment_results.append({
-                "encoder": TEXT_ENCODER,
-                "loss_type": LOSS_TYPE,
-                "seed": SEED,
-                # Level 1
-                "l1_accuracy": l1_acc,
-                "l1_macro_f1": report_l1["macro avg"]["f1-score"],
-                # "l1_weighted_f1": report_l1["weighted avg"]["f1-score"],
-                # Level 2
-                "l2_accuracy": l2_acc,
-                "l2_macro_f1": report_l2["macro avg"]["f1-score"],
-                # "l2_weighted_f1": report_l2["weighted avg"]["f1-score"]
-                # Average across Level 1 and Level 2
-                "avg_accuracy": (l1_acc + l2_acc) / 2,
-                "avg_macro_f1": (report_l1["macro avg"]["f1-score"] + report_l2["macro avg"]["f1-score"]) / 2,
-                # "avg_weighted_f1": (report_l1["weighted avg"]["f1-score"] + report_l2["weighted avg"]["f1-score"]) / 2
-            })
-
-        # Save result for this config
-        experiment_df = pd.DataFrame(experiment_results)
-        experiment_df.to_csv(os.path.join(experiment_dir, "seed_comparison.csv"), index=False)
-        all_results.extend(experiment_results)
+            # Save result for this config
+            experiment_df = pd.DataFrame(experiment_results)
+            experiment_df.to_csv(os.path.join(experiment_dir, "seed_comparison.csv"), index=False)
+            all_results.extend(experiment_results)
 
     all_results_df = pd.DataFrame(all_results)
     all_results_df.to_csv(os.path.join(RESULTS_DIR, "all_experiments.csv"), index=False)
