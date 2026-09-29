@@ -423,56 +423,28 @@ def main():
             print("Level 1 classes:", list(le1.classes_))
             print("Level 2 classes:", list(le2.classes_))
 
-            # Creating embeddings for image and text
-            train_img_emb = get_image_embeddings(img_model, train_df['image_path'].tolist(), IMAGE_DIR, batch_size=32)
-            val_img_emb = get_image_embeddings(img_model, val_df['image_path'].tolist(), IMAGE_DIR, batch_size=32)
+            # Image embeddings
+            train_img_emb = all_img_emb[train_indices]
+            val_img_emb = all_img_emb[val_indices]
 
-            # train_txt_emb = get_text_embeddings(text_model, train_df['Text'].astype(str).tolist(), batch_size=32)
-            # val_txt_emb = get_text_embeddings(text_model, val_df['Text'].astype(str).tolist(), batch_size=32)
+            # Text embeddings
+            all_txt_emb = text_embeddings[TEXT_ENCODER]
 
-            # ============================================================
-            # TEXT EMBEDDINGS
-            # ============================================================
+            train_txt_emb = all_txt_emb[train_indices]
+            val_txt_emb = all_txt_emb[val_indices]
 
-            if TEXT_ENCODER == "bge-m3":
-                train_txt_emb = get_bge_embeddings(
-                    text_model,
-                    train_df['Text'].astype(str).tolist(),
-                    device,
-                    batch_size=32
-                )
-                val_txt_emb = get_bge_embeddings(
-                    text_model,
-                    val_df['Text'].astype(str).tolist(),
-                    device,
-                    batch_size=32
-                )
-            elif TEXT_ENCODER == "muril":
-                train_txt_emb = get_muril_embeddings(
-                    text_model,
-                    text_tokenizer,
-                    train_df['Text'].astype(str).tolist(),
-                    device,
-                    batch_size=32
-                )
-                val_txt_emb = get_muril_embeddings(
-                    text_model,
-                    text_tokenizer,
-                    val_df['Text'].astype(str).tolist(),
-                    device,
-                    batch_size=32
-                )
-
-                pca = PCA(n_components=512, random_state=SEED)
-                train_txt_emb = pca.fit_transform(train_txt_emb)
-                val_txt_emb = pca.transform(val_txt_emb)
-                explained_variance = pca.explained_variance_ratio_.sum()
-                print(f"{TEXT_ENCODER} PCA explained variance: {explained_variance:.4f}")
+            pca = PCA(n_components=512, random_state=SEED)
+            train_txt_emb = pca.fit_transform(train_txt_emb)
+            val_txt_emb = pca.transform(val_txt_emb)
+            explained_variance = pca.explained_variance_ratio_.sum()
+            print(
+                f"\n{TEXT_ENCODER} PCA explained variance: "
+                f"{explained_variance:.4f}"
+            )
 
             # Fusion of Image and Text embeddings
             train_features = np.concatenate([train_img_emb, train_txt_emb], axis=1)
             val_features = np.concatenate([val_img_emb, val_txt_emb], axis=1)
-            # print("\nFused feature dim:", train_features.shape[1])
             print("\nImage embedding dimension:", train_img_emb.shape[1])
             print("Text embedding dimension:", train_txt_emb.shape[1])
             print("Fused feature dimension:", train_features.shape[1])
