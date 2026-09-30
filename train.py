@@ -4,7 +4,6 @@ import pandas as pd
 import random
 import argparse
 from pathlib import Path
-import seaborn as sns
 from PIL import Image
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
@@ -20,7 +19,6 @@ from huggingface_hub import whoami
 from dotenv import load_dotenv
 from sklearn.utils.class_weight import compute_class_weight
 from transformers import AutoTokenizer, AutoModel
-from sklearn.decomposition import PCA
 
 load_dotenv()
 hf_token = os.getenv("HF_TOKEN")
@@ -33,10 +31,8 @@ class MemeFeatureDataset(Dataset):
         self.features = torch.tensor(features, dtype=torch.float32)
         self.l1 = torch.tensor(l1_labels, dtype=torch.long)
         self.l2 = torch.tensor(l2_labels, dtype=torch.long)
-
     def __len__(self):
         return len(self.features)
-
     def __getitem__(self, idx):
         return self.features[idx], self.l1[idx], self.l2[idx]
 
@@ -62,7 +58,6 @@ class HierarchicalClassifier(nn.Module):
             nn.ReLU(),
             nn.Linear(16, num_l2),
         )
-
     def forward(self, x):
         shared = self.shared(x)
         l1_logits = self.l1_head(shared)
@@ -71,11 +66,7 @@ class HierarchicalClassifier(nn.Module):
         return l1_logits, l2_logits
 
 def count_parameters(module):
-    return sum(
-        p.numel()
-        for p in module.parameters()
-        if p.requires_grad
-    )
+    return sum(p.numel() for p in module.parameters() if p.requires_grad)
 
 def model_description(model):
     print(
@@ -101,11 +92,9 @@ def model_description(model):
     print("-" * 105)
     print(f"{'Total trainable':<90}{total:>15,}")
 
-
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--train_dir", type=str, default="./data/train", help="Path to the training data")
-
     return parser.parse_args()
 
 def set_seed(SEED):
@@ -121,19 +110,17 @@ def set_seed(SEED):
 def save_embeddings(embeddings, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     np.save(path, embeddings)
-    print(f"Saved embeddings: {path}")
+    print(f"\nSaved embeddings: {path}")
     print(f"Shape: {embeddings.shape}")
-
 
 def load_embeddings(path):
     embeddings = np.load(path)
-    print(f"Loaded embeddings: {path}")
+    print(f"\nLoaded embeddings: {path}")
     print(f"Shape: {embeddings.shape}")
     return embeddings
 
 def distribution_plot(df, train_df, val_df, seed_dir):
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-
+    fig, axes = plt.subplots(1, 2, figsize=(20, 12))
     # --- Level1 ---
     total_counts1 = df['Level1'].value_counts()
     train_counts1 = train_df['Level1'].value_counts().reindex(total_counts1.index, fill_value=0)
@@ -149,15 +136,15 @@ def distribution_plot(df, train_df, val_df, seed_dir):
     axes[0].set_ylim(0, max_y1 * 1.08)
 
     axes[0].set_xticks(x)
-    axes[0].set_ylabel("Instances", fontsize=12)
-    axes[0].set_xticklabels(labels1, rotation=30, fontweight='bold', fontsize=12)
-    axes[0].set_title("Level 1", fontsize=20)
+    axes[0].set_ylabel("Instances", fontsize=20, fontweight='bold')
+    axes[0].set_xticklabels(labels1, rotation=30, fontweight='bold', fontsize=20)
+    axes[0].set_title("Level 1", fontsize=28, fontweight='bold')
     axes[0].legend()
 
     # Add labels on bars
-    axes[0].bar_label(bars_total, padding=2)
-    axes[0].bar_label(bars_train, padding=2)
-    axes[0].bar_label(bars_val, padding=2)
+    axes[0].bar_label(bars_total, padding=2, fontsize=16)
+    axes[0].bar_label(bars_train, padding=2, fontsize=16)
+    axes[0].bar_label(bars_val, padding=2, fontsize=16)
 
     # --- Level2 comparison ---
     total_counts2 = df['Level2'].value_counts()
@@ -174,19 +161,20 @@ def distribution_plot(df, train_df, val_df, seed_dir):
     axes[1].set_ylim(0, max_y2 * 1.08)
 
     axes[1].set_xticks(x)
-    axes[1].set_ylabel("Instances", fontsize=12)
-    axes[1].set_xticklabels(labels2, rotation=30, fontweight='bold', fontsize=12)
-    axes[1].set_title("Level 2", fontsize=20)
+    axes[1].set_ylabel("Instances", fontsize=20, fontweight='bold')
+    axes[1].set_xticklabels(labels2, rotation=30, fontweight='bold', fontsize=20)
+    axes[1].set_title("Level 2", fontsize=28, fontweight='bold')
     axes[1].legend()
 
     # Add labels on bars
-    axes[1].bar_label(bars_total, padding=2)
-    axes[1].bar_label(bars_train, padding=2)
-    axes[1].bar_label(bars_val, padding=2)
+    axes[1].bar_label(bars_total, padding=2, fontsize=16)
+    axes[1].bar_label(bars_train, padding=2, fontsize=16)
+    axes[1].bar_label(bars_val, padding=2, fontsize=16)
 
-    fig.suptitle(f"Train and validation splitting", fontsize=24)
+    fig.suptitle(f"Train and validation splitting", fontsize=36)
     plt.tight_layout()
     plt.savefig(os.path.join(seed_dir, f"label_distribution.png"), dpi=300, bbox_inches='tight')
+    plt.close(fig)
     # plt.show()
 
 def get_image_embeddings(img_model, paths, IMAGE_DIR, batch_size=32):
@@ -200,10 +188,6 @@ def get_image_embeddings(img_model, paths, IMAGE_DIR, batch_size=32):
 
 def get_text_embeddings(text_model, texts, batch_size=32):
     return text_model.encode(list(texts), batch_size=batch_size, convert_to_numpy=True, show_progress_bar=False)
-
-# ============================================================
-# TEXT EMBEDDING FUNCTIONS
-# ============================================================
 
 def get_bge_embeddings(text_model, texts, device, batch_size=32):
     embeddings = []
@@ -220,7 +204,6 @@ def get_bge_embeddings(text_model, texts, device, batch_size=32):
         # BGE-M3 = 1024 dimensions
         embeddings.append(batch_embeddings.cpu().numpy())
     return np.vstack(embeddings)
-
 
 def get_muril_embeddings(text_model, tokenizer, texts, device, batch_size=32):
     embeddings = []
@@ -252,9 +235,7 @@ def stratified_split(df, seed, split_strategy, test_size=0.10):
     elif split_strategy == "level2":
         stratify_labels = df["Level2"]
     else:
-        raise ValueError(
-            f"Unknown split strategy: {split_strategy}"
-        )
+        raise ValueError(f"Unknown split strategy: {split_strategy}")
     train_df, val_df = train_test_split(df, test_size=test_size, random_state=seed, stratify=stratify_labels)
     return train_df, val_df
 
@@ -289,12 +270,7 @@ def main():
     EMBEDDINGS_DIR = RESULTS_DIR / "embeddings"
     EMBEDDINGS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ============================================================
-    # IMAGE ENCODER
-    # ============================================================
-
     img_model = SentenceTransformer("clip-ViT-B-32", device=str(device), cache_folder="./hf_models")
-
     image_embedding_path = EMBEDDINGS_DIR / "image_embeddings.npy"
     if image_embedding_path.exists():
         print("\nLoading precomputed image embeddings...")
@@ -304,12 +280,7 @@ def main():
         all_img_emb = get_image_embeddings(img_model, df['image_path'].tolist(), IMAGE_DIR, batch_size=32)
         save_embeddings(all_img_emb,image_embedding_path)
 
-    # ============================================================
-    # TEXT EMBEDDINGS PER ENCODER
-    # ============================================================
-
     text_embeddings = {}
-
     for encoder_name in ["bge-m3", "muril"]:
         if encoder_name == "bge-m3":
             text_embedding_path = EMBEDDINGS_DIR / "bge-m3_text_embeddings.npy"
@@ -368,10 +339,7 @@ def main():
     seeds = [7, 10, 42, 56, 100]
 
     all_results = []
-    SPLIT_STRATEGIES = [
-        "level1",
-        "level2"
-    ]
+    SPLIT_STRATEGIES = ["level1", "level2"]
 
     for SPLIT_STRATEGY in SPLIT_STRATEGIES:
         for EXP in EXPERIMENTS:
@@ -380,14 +348,12 @@ def main():
 
             for LOSS_TYPE in LOSS_TYPES:
                 print("\n" + "=" * 80)
-
                 print(
                     f"Modality={MODALITY} | "
                     f"Encoder={TEXT_ENCODER} | "
                     f"Loss={LOSS_TYPE} | "
                     f"Split={SPLIT_STRATEGY}"
                 )
-
                 print("=" * 80)
 
                 experiment_dir = os.path.join(
@@ -403,8 +369,6 @@ def main():
                 )
 
                 experiment_results = []
-
-
                 for SEED in seeds:
                     print("\n" + "-" * 70)
                     print(
@@ -462,14 +426,6 @@ def main():
                         all_txt_emb = text_embeddings[TEXT_ENCODER]
                         train_txt_emb = all_txt_emb[train_indices]
                         val_txt_emb = all_txt_emb[val_indices]
-                        pca = PCA(n_components=512, random_state=SEED)
-                        train_txt_emb = pca.fit_transform(train_txt_emb)
-                        val_txt_emb = pca.transform(val_txt_emb)
-                        explained_variance = (pca.explained_variance_ratio_.sum())
-                        print(
-                            f"\n{TEXT_ENCODER} PCA explained variance: "
-                            f"{explained_variance:.4f}"
-                        )
                         train_features = train_txt_emb
                         val_features = val_txt_emb
                         print("Text embedding dimension:", train_features.shape[1])
@@ -479,14 +435,7 @@ def main():
                         all_txt_emb = text_embeddings[TEXT_ENCODER]
                         train_txt_emb = all_txt_emb[train_indices]
                         val_txt_emb = all_txt_emb[val_indices]
-                        pca = PCA(n_components=512, random_state=SEED)
-                        train_txt_emb = pca.fit_transform(train_txt_emb)
-                        val_txt_emb = pca.transform(val_txt_emb)
-                        explained_variance = (pca.explained_variance_ratio_.sum())
-                        print(
-                            f"\n{TEXT_ENCODER} PCA explained variance: "
-                            f"{explained_variance:.4f}"
-                        )
+
                         # CONCATENATION / EARLY FUSION
                         train_features = np.concatenate([train_img_emb, train_txt_emb], axis=1)
                         val_features = np.concatenate([val_img_emb, val_txt_emb], axis=1)
@@ -578,9 +527,9 @@ def main():
                         acc_l2 = accuracy_score(all_l2_true, all_l2_preds)
                         return avg_val_loss, f1_l1, f1_l2, acc_l1, acc_l2
 
+                    # Model Training
                     best_f1 = 0
                     history = []
-
                     for epoch in range(EPOCHS):
                         model.train()
                         total_loss = 0
@@ -605,7 +554,6 @@ def main():
                             "val_f1_l1": f1_l1,
                             "val_f1_l2": f1_l2
                         })
-
                         print(
                             f"Epoch {epoch + 1}/{EPOCHS} "
                             f"| train_loss={total_loss / len(train_loader):.4f} "
@@ -626,25 +574,23 @@ def main():
                             print(f"-> saved new best model: {model_path}")
 
                     hist_df = pd.DataFrame(history)
-                    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-                    # Training and Validation Loss
-                    axes[0].plot(hist_df['epoch'], hist_df['loss'], label='Train Loss')
-                    axes[0].plot(hist_df['epoch'], hist_df['val_loss'], label='Validation Loss')
-                    axes[0].set_title('Training vs Validation Loss')
-                    axes[0].set_xlabel("epoch", fontsize=12)
-                    axes[0].set_ylabel("loss", fontsize=12)
-                    axes[0].legend()
+                    fig, ax = plt.subplots(figsize=(6, 4))
                     # Validation F1
-                    axes[1].plot(hist_df['epoch'], hist_df['val_f1_l1'], label='Level 1 F1')
-                    axes[1].plot(hist_df['epoch'], hist_df['val_f1_l2'], label='Level 2 F1')
-                    axes[1].legend()
-                    # axes[1].set_title('Validation Macro-F1')
-                    axes[1].set_xlabel("epoch", fontsize=12)
-                    axes[1].set_ylabel("Macro-F1", fontsize=12)
-                    # fig.suptitle(f"Training/Validation Loss and Validation F1 - seed {SEED}")
-                    fig.suptitle(f"Validation Macro-F1")
+                    ax.plot(hist_df['epoch'], hist_df['val_f1_l1'], label='Level 1 F1')
+                    ax.plot(hist_df['epoch'], hist_df['val_f1_l2'], label='Level 2 F1')
+
+                    ax.set_xlabel("Epoch", fontsize=16, fontweight="bold")
+                    ax.set_ylabel("Macro-F1", fontsize=16, fontweight="bold")
+                    ax.set_title("Validation Macro-F1", fontsize=20, fontweight="bold")
+                    ax.legend()
+
                     plt.tight_layout()
-                    plt.savefig(os.path.join(seed_dir, f"val_macro_f1.png"), dpi=300, bbox_inches='tight')
+                    plt.savefig(
+                        os.path.join(seed_dir, "val_macro_f1.png"),
+                        dpi=300,
+                        bbox_inches="tight"
+                    )
+                    plt.close(fig)
                     # plt.show()
 
                     model.load_state_dict(torch.load(model_path))
@@ -678,8 +624,6 @@ def main():
                         f.write(str(report_l1))
                     with open(os.path.join(seed_dir, "level2_report.txt"), "w") as f:
                         f.write(str(report_l2))
-                    # print(report_l1)
-                    # print(report_l2)
 
                     l1_acc = accuracy_score(all_l1_true, all_l1_preds)
                     l2_acc = accuracy_score(all_l2_true, all_l2_preds)
@@ -720,11 +664,7 @@ def main():
             float_format=lambda x: f"{x:.4f}"
         )
     )
-
-    # ================================================================
     # FINAL RESULTS: MEAN ± STD FOR EACH CONFIGURATION
-    # ================================================================
-
     metric_columns = [
         "l1_accuracy",
         "l1_macro_f1",
@@ -736,18 +676,8 @@ def main():
         "avg_macro_f1",
         # "avg_weighted_f1"
     ]
-
     final_results = []
-
-    grouped_results = all_results_df.groupby(
-        [
-            "split_strategy",
-            "modality",
-            "encoder",
-            "loss_type"
-        ]
-    )
-
+    grouped_results = all_results_df.groupby(["split_strategy", "modality", "encoder", "loss_type"])
     for (split_strategy, modality, encoder, loss_type), group in grouped_results:
         for metric in metric_columns:
             final_results.append({
@@ -761,15 +691,8 @@ def main():
                 "min": group[metric].min(),
                 "max": group[metric].max()
             })
-
-    final_results_df = pd.DataFrame(
-        final_results
-    )
-
-    # ================================================================
+    final_results_df = pd.DataFrame(final_results)
     # SAVE FINAL RESULTS
-    # ================================================================
-
     final_results_df.to_csv(
         os.path.join(
             RESULTS_DIR,
@@ -777,32 +700,21 @@ def main():
         ),
         index=False
     )
-
-    # ================================================================
     # PRINT FINAL RESULTS
-    # ================================================================
-
     print("\n" + "=" * 100)
     print("FINAL RESULTS")
     print("=" * 100)
-
     print(
         final_results_df.to_string(
             index=False,
             float_format=lambda x: f"{x:.4f}"
         )
     )
-
-    # ================================================================
     # PRINT MEAN ± STD
-    # ================================================================
-
     print("\n" + "=" * 100)
     print("MEAN ± STD")
     print("=" * 100)
-
     for (split_strategy, modality, encoder, loss_type), group in grouped_results:
-
         print("\n" + "-" * 70)
         print(
             f"Split: {split_strategy} | "
@@ -815,7 +727,6 @@ def main():
         for metric in metric_columns:
             mean = group[metric].mean()
             std = group[metric].std()
-
             print(
                 f"{metric:<25} "
                 f"{mean:.4f} ± {std:.4f}"
