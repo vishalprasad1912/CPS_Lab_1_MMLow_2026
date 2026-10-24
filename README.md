@@ -1,4 +1,4 @@
-**CPS Lab 1 @ MMLow 2026 Hierarchical Multimodal Classification of Tamil Political Memes via Logit-Conditioned Stance-Target Prediction** accepted at the **Fifth Workshop on Multimodal Machine Learning in Low-Resource Languages (MMLow 2026)**, co-located with **AACL-IJCNLP 2026**.
+Our Paper **CPS Lab 1 @ MMLow 2026 Hierarchical Multimodal Classification of Tamil Political Memes via Logit-Conditioned Stance-Target Prediction** accepted at the **Fifth Workshop on Multimodal Machine Learning in Low-Resource Languages (MMLow 2026)**, co-located with **AACL-IJCNLP 2026**.
 
 ---
 
@@ -80,7 +80,9 @@ python -m train.py
 ### Acknowledgements
 
 This work was carried out at **CPS Lab** and accepted as a poster presentation at **MMLow 2026**, the Fifth Workshop on Multimodal Machine Learning in Low-Resource Languages, co-located with **AACL-IJCNLP 2026**.
+
 Our system achieved **3rd Rank in the Shared Task**, demonstrating the effectiveness of hierarchical multimodal learning and logit-conditioned prediction for Tamil political meme classification.
+
 ---
 
 ### Contact
