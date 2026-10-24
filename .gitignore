@@ -1,3 +1,6 @@
+.venv
 .env
+.idea
 hf_models/
 cache/
+Multi Level Political Meme Classification.ipynb
